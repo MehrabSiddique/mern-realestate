@@ -1,12 +1,5 @@
-import { useSelector } from 'react-redux';
-import { useRef, useState, useEffect } from 'react';
-import {
-  getDownloadURL,
-  getStorage,
-  ref,
-  uploadBytesResumable,
-} from 'firebase/storage';
-import { app } from '../firebase';
+import { useSelector, useDispatch } from 'react-redux';
+import { useRef, useState } from 'react';
 import {
   updateUserStart,
   updateUserSuccess,
@@ -16,77 +9,53 @@ import {
   deleteUserSuccess,
   signOutUserStart,
 } from '../redux/user/userSlice';
-import { useDispatch } from 'react-redux';
 import { Link } from 'react-router-dom';
+
 export default function Profile() {
   const fileRef = useRef(null);
   const { currentUser, loading, error } = useSelector((state) => state.user);
-  const [file, setFile] = useState(undefined);
-  const [filePerc, setFilePerc] = useState(0);
-  const [fileUploadError, setFileUploadError] = useState(false);
+  const [file, setFile] = useState(null);
   const [formData, setFormData] = useState({});
+  const [preview, setPreview] = useState(currentUser.avatar);
   const [updateSuccess, setUpdateSuccess] = useState(false);
   const [showListingsError, setShowListingsError] = useState(false);
   const [userListings, setUserListings] = useState([]);
   const dispatch = useDispatch();
 
-  // firebase storage
-  // allow read;
-  // allow write: if
-  // request.resource.size < 2 * 1024 * 1024 &&
-  // request.resource.contentType.matches('image/.*')
-
-  useEffect(() => {
-    if (file) {
-      handleFileUpload(file);
-    }
-  }, [file]);
-
-  const handleFileUpload = (file) => {
-    const storage = getStorage(app);
-    const fileName = new Date().getTime() + file.name;
-    const storageRef = ref(storage, fileName);
-    const uploadTask = uploadBytesResumable(storageRef, file);
-
-    uploadTask.on(
-      'state_changed',
-      (snapshot) => {
-        const progress =
-          (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        setFilePerc(Math.round(progress));
-      },
-      (error) => {
-        setFileUploadError(true);
-      },
-      () => {
-        getDownloadURL(uploadTask.snapshot.ref).then((downloadURL) =>
-          setFormData({ ...formData, avatar: downloadURL })
-        );
-      }
-    );
-  };
-
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.id]: e.target.value });
   };
 
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files[0];
+    setFile(selectedFile);
+    setPreview(URL.createObjectURL(selectedFile)); // Show preview before upload
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    const formDataToSend = new FormData();
+    formDataToSend.append('username', formData.username || currentUser.username);
+    formDataToSend.append('email', formData.email || currentUser.email);
+    if (formData.password) {
+      formDataToSend.append('password', formData.password);
+    }
+    if (file) {
+      formDataToSend.append('avatar', file);
+    }
+
     try {
       dispatch(updateUserStart());
       const res = await fetch(`/api/user/update/${currentUser._id}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(formData),
+        body: formDataToSend,
+        credentials: 'include',
       });
       const data = await res.json();
       if (data.success === false) {
         dispatch(updateUserFailure(data.message));
         return;
       }
-
       dispatch(updateUserSuccess(data));
       setUpdateSuccess(true);
     } catch (error) {
@@ -99,6 +68,7 @@ export default function Profile() {
       dispatch(deleteUserStart());
       const res = await fetch(`/api/user/delete/${currentUser._id}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
       const data = await res.json();
       if (data.success === false) {
@@ -114,7 +84,9 @@ export default function Profile() {
   const handleSignOut = async () => {
     try {
       dispatch(signOutUserStart());
-      const res = await fetch('/api/auth/signout');
+      const res = await fetch('/api/auth/signout', {
+        credentials: 'include',
+      });
       const data = await res.json();
       if (data.success === false) {
         dispatch(deleteUserFailure(data.message));
@@ -122,20 +94,21 @@ export default function Profile() {
       }
       dispatch(deleteUserSuccess(data));
     } catch (error) {
-      dispatch(deleteUserFailure(data.message));
+      dispatch(deleteUserFailure(error.message));
     }
   };
 
   const handleShowListings = async () => {
     try {
       setShowListingsError(false);
-      const res = await fetch(`/api/user/listings/${currentUser._id}`);
+      const res = await fetch(`/api/user/listings/${currentUser._id}`, {
+        credentials: 'include',
+      });
       const data = await res.json();
       if (data.success === false) {
         setShowListingsError(true);
         return;
       }
-
       setUserListings(data);
     } catch (error) {
       setShowListingsError(true);
@@ -146,6 +119,7 @@ export default function Profile() {
     try {
       const res = await fetch(`/api/listing/delete/${listingId}`, {
         method: 'DELETE',
+        credentials: 'include',
       });
       const data = await res.json();
       if (data.success === false) {
@@ -153,64 +127,50 @@ export default function Profile() {
         return;
       }
 
-      setUserListings((prev) =>
-        prev.filter((listing) => listing._id !== listingId)
-      );
+      setUserListings((prev) => prev.filter((listing) => listing._id !== listingId));
     } catch (error) {
       console.log(error.message);
     }
   };
+
   return (
     <div className='p-3 max-w-lg mx-auto'>
       <h1 className='text-3xl font-semibold text-center my-7'>Profile</h1>
       <form onSubmit={handleSubmit} className='flex flex-col gap-4'>
         <input
-          onChange={(e) => setFile(e.target.files[0])}
           type='file'
           ref={fileRef}
+          onChange={handleFileChange}
           hidden
           accept='image/*'
         />
         <img
           onClick={() => fileRef.current.click()}
-          src={formData.avatar || currentUser.avatar}
+          src={preview}
           alt='profile'
           className='rounded-full h-24 w-24 object-cover cursor-pointer self-center mt-2'
         />
-        <p className='text-sm self-center'>
-          {fileUploadError ? (
-            <span className='text-red-700'>
-              Error Image upload (image must be less than 2 mb)
-            </span>
-          ) : filePerc > 0 && filePerc < 100 ? (
-            <span className='text-slate-700'>{`Uploading ${filePerc}%`}</span>
-          ) : filePerc === 100 ? (
-            <span className='text-green-700'>Image successfully uploaded!</span>
-          ) : (
-            ''
-          )}
-        </p>
         <input
           type='text'
-          placeholder='username'
-          defaultValue={currentUser.username}
           id='username'
-          className='border p-3 rounded-lg'
+          placeholder='Username'
+          defaultValue={currentUser.username}
           onChange={handleChange}
+          className='border p-3 rounded-lg'
         />
         <input
           type='email'
-          placeholder='email'
           id='email'
+          placeholder='Email'
           defaultValue={currentUser.email}
-          className='border p-3 rounded-lg'
           onChange={handleChange}
+          className='border p-3 rounded-lg'
         />
         <input
           type='password'
-          placeholder='password'
-          onChange={handleChange}
           id='password'
+          placeholder='Password'
+          onChange={handleChange}
           className='border p-3 rounded-lg'
         />
         <button
@@ -226,11 +186,9 @@ export default function Profile() {
           Create Listing
         </Link>
       </form>
+
       <div className='flex justify-between mt-5'>
-        <span
-          onClick={handleDeleteUser}
-          className='text-red-700 cursor-pointer'
-        >
+        <span onClick={handleDeleteUser} className='text-red-700 cursor-pointer'>
           Delete account
         </span>
         <span onClick={handleSignOut} className='text-red-700 cursor-pointer'>
@@ -238,22 +196,17 @@ export default function Profile() {
         </span>
       </div>
 
-      <p className='text-red-700 mt-5'>{error ? error : ''}</p>
-      <p className='text-green-700 mt-5'>
-        {updateSuccess ? 'User is updated successfully!' : ''}
-      </p>
-      <button onClick={handleShowListings} className='text-green-700 w-full'>
+      {error && <p className='text-red-700 mt-5'>{error}</p>}
+      {updateSuccess && <p className='text-green-700 mt-5'>User updated successfully!</p>}
+
+      <button onClick={handleShowListings} className='text-green-700 w-full mt-5'>
         Show Listings
       </button>
-      <p className='text-red-700 mt-5'>
-        {showListingsError ? 'Error showing listings' : ''}
-      </p>
+      {showListingsError && <p className='text-red-700 mt-2'>Error showing listings</p>}
 
-      {userListings && userListings.length > 0 && (
-        <div className='flex flex-col gap-4'>
-          <h1 className='text-center mt-7 text-2xl font-semibold'>
-            Your Listings
-          </h1>
+      {userListings.length > 0 && (
+        <div className='flex flex-col gap-4 mt-4'>
+          <h1 className='text-center text-2xl font-semibold'>Your Listings</h1>
           {userListings.map((listing) => (
             <div
               key={listing._id}
@@ -262,18 +215,17 @@ export default function Profile() {
               <Link to={`/listing/${listing._id}`}>
                 <img
                   src={listing.imageUrls[0]}
-                  alt='listing cover'
+                  alt='listing'
                   className='h-16 w-16 object-contain'
                 />
               </Link>
               <Link
-                className='text-slate-700 font-semibold  hover:underline truncate flex-1'
                 to={`/listing/${listing._id}`}
+                className='text-slate-700 font-semibold hover:underline truncate flex-1'
               >
                 <p>{listing.name}</p>
               </Link>
-
-              <div className='flex flex-col item-center'>
+              <div className='flex flex-col items-center'>
                 <button
                   onClick={() => handleListingDelete(listing._id)}
                   className='text-red-700 uppercase'
